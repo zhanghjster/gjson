@@ -4,7 +4,9 @@ import (
 	"strconv"
 )
 
-type callback func(node *PathNode, value *Value)
+const unescapeStackBufSize = 64
+
+type callback func(node *PathNode, value Value)
 type parseManyContext struct {
 	json []byte
 
@@ -35,9 +37,11 @@ func ParseMany(json []byte, path *PathNode, cb callback) {
 }
 
 func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
-	var kesc, vesc, ok, hit bool
-	var key string
+	var kesc, vesc, ok bool
+	var key []byte
 	var val []byte
+
+	var stackBuf [unescapeStackBufSize]byte
 
 	for i < len(c.json) {
 		// parse key
@@ -50,7 +54,7 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 						continue
 					}
 					if c.json[i] == '"' {
-						i, key, kesc, ok = i+1, string(c.json[s:i]), false, true
+						i, key, kesc, ok = i+1, c.json[s:i], false, true
 						goto parseKeyStringDone
 					}
 					if c.json[i] == '\\' {
@@ -73,14 +77,14 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 										continue
 									}
 								}
-								i, key, kesc, ok = i+1, string(c.json[s:i]), true, true
+								i, key, kesc, ok = i+1, c.json[s:i], true, true
 								goto parseKeyStringDone
 							}
 						}
 						break
 					}
 				}
-				key, kesc, ok = string(c.json[s:]), false, false
+				key, kesc, ok = c.json[s:], false, false
 			parseKeyStringDone:
 				break
 			}
@@ -94,11 +98,11 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 			return i, false
 		}
 		if kesc {
-			key = unescape(key)
+			key, _ = unescapeBytes(key, stackBuf[:])
 		}
 
-		next, ok := path.child[key]
-		hit = ok && next.check
+		next, ok := path.child[string(key)]
+		hit, subChk := ok && next.check, ok && next.sub > 0
 
 		// parse value
 		for ; i < len(c.json); i++ {
@@ -112,6 +116,7 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 				}
 
 				if hit {
+
 					var value = Value{
 						Raw:  val,
 						Type: String,
@@ -121,18 +126,19 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 						value.Str = unescape(value.Str)
 					}
 
-					c.cb(next, &value)
+					_ = value
+					c.cb(next, value)
 					c.checked += next.sub + 1
 				}
 			case '{':
-				if hit && next.sub > 0 {
+				if subChk {
 					i, _ = parseObjectMany(c, i+1, next)
 				} else {
-					i, val = parseSquashByte(c.json, i+1)
+					i, val = parseSquashByte(c.json, i)
 				}
 
 				if hit {
-					c.cb(next, &Value{Raw: val, Type: Object})
+					c.cb(next, Value{Raw: val, Type: Object})
 					c.checked++
 				}
 			case '[':
@@ -143,14 +149,14 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 				}
 
 				if hit {
-					c.cb(next, &Value{Raw: val, Type: Array})
+					c.cb(next, Value{Raw: val, Type: Array})
 					c.checked++
 				}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 				var typ Type
 				i, val, typ = parseNumberByte(c.json, i)
 				if hit {
-					c.cb(next, &Value{Raw: val, Type: typ})
+					c.cb(next, Value{Raw: val, Type: typ})
 					c.checked += next.sub + 1
 				}
 			case 't', 'f', 'n':
@@ -166,7 +172,7 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 					case 'n':
 						value.Type = Null
 					}
-					c.cb(next, &value)
+					c.cb(next, value)
 					c.checked += next.sub + 1
 				}
 			}
@@ -184,13 +190,12 @@ func parseObjectMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 func parseArrayMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 	var vesc, hit bool
 	var val []byte
-	var h int
+	var idx int
 
-	for i < len(c.json)+1 {
-		next, ok := path.child[strconv.Itoa(h)]
+	for ; i < len(c.json)+1; idx++ {
+		next, ok := path.child[strconv.Itoa(idx)]
 		hit = ok && next.check
 
-		h++
 		for ; ; i++ {
 			var ch byte
 			if i > len(c.json) {
@@ -219,7 +224,7 @@ func parseArrayMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 						value.Str = unescape(value.Str)
 					}
 
-					c.cb(next, &value)
+					c.cb(next, value)
 					c.checked += next.sub + 1
 				}
 			case '{':
@@ -230,7 +235,7 @@ func parseArrayMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 				}
 
 				if hit {
-					c.cb(next, &Value{Raw: val, Type: Object})
+					c.cb(next, Value{Raw: val, Type: Object})
 					c.checked++
 				}
 			case '[':
@@ -241,14 +246,14 @@ func parseArrayMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 				}
 
 				if hit {
-					c.cb(next, &Value{Raw: val, Type: Array})
+					c.cb(next, Value{Raw: val, Type: Array})
 					c.checked++
 				}
 			case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 				var typ Type
 				i, val, typ = parseNumberByte(c.json, i)
 				if hit {
-					c.cb(next, &Value{Raw: val, Type: typ})
+					c.cb(next, Value{Raw: val, Type: typ})
 					c.checked += next.sub + 1
 				}
 			case 't', 'f', 'n':
@@ -264,9 +269,11 @@ func parseArrayMany(c *parseManyContext, i int, path *PathNode) (int, bool) {
 					case 'n':
 						value.Type = Null
 					}
-					c.cb(next, &value)
+					c.cb(next, value)
 					c.checked += next.sub + 1
 				}
+			case ']':
+				return i + 1, true
 			}
 			break
 		}
