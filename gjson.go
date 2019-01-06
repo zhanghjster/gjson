@@ -33,6 +33,14 @@ const (
 	True
 	// JSON is a raw block of JSON
 	JSON
+	// Object is a raw block of {}
+	Object
+	// Array is a raw block of []
+	Array
+	// Integer is a 64 bit integer
+	Integer
+	// float is a 64 bit float
+	Float
 )
 
 // String returns a string representation of the type.
@@ -645,7 +653,6 @@ func (t Result) Value() interface{} {
 	}
 }
 
-
 func parseString(json string, i int) (int, string, bool, bool) {
 	var s = i
 	for ; i < len(json); i++ {
@@ -695,7 +702,6 @@ func parseNumber(json string, i int) (int, string) {
 	return i, json[s:]
 }
 
-
 func parseLiteral(json string, i int) (int, string) {
 	var s = i
 	i++
@@ -706,7 +712,6 @@ func parseLiteral(json string, i int) (int, string) {
 	}
 	return i, json[s:]
 }
-
 
 type arrayPathResult struct {
 	part    string
@@ -897,7 +902,6 @@ func parseObjectPath(path string) (r objectPathResult) {
 	r.part = path
 	return
 }
-
 
 func parseSquash(json string, i int) (int, string) {
 	// expects that the lead character is a '[' or '{'
@@ -1644,9 +1648,6 @@ func GetMany(json string, path ...string) []Result {
 	}
 	return res
 }
-
-
-
 
 // GetManyBytes searches json for the multiple paths.
 // The return value is a Result array where the number of items
